@@ -34,7 +34,7 @@ import {
   MapPin, User, Ruler, Hammer, CheckCircle2, FileJson, FileSpreadsheet,
   Printer, Upload, Sparkles, Copy, Share2, AlertCircle, AlertTriangle,
   MoreVertical, Loader2, Settings, Cloud, CloudOff, RefreshCw, Eye, EyeOff,
-  Wifi, WifiOff, RotateCcw,
+  Wifi, WifiOff, RotateCcw, Folder, ExternalLink,
 } from "lucide-react";
 
 /* =====================================================================
@@ -146,6 +146,7 @@ const emptyLead = () => ({
   workScope: [],
   materials: cloneDefaults(),
   airtableRecordId: null,
+  driveFolderUrl: "",       // bridge to Google Drive folder; populated by app at v4, manual entry allowed before then
   syncStatus: "local",      // 'local' | 'syncing' | 'synced' | 'error'
   syncError: null,
   lastSyncAt: null,
@@ -171,6 +172,7 @@ function normaliseLead(data) {
   if (!out.createdAt) out.createdAt = new Date().toISOString();
   out.updatedAt = new Date().toISOString();
   out.airtableRecordId = out.airtableRecordId ?? null;
+  out.driveFolderUrl = out.driveFolderUrl ?? "";
   out.syncStatus = out.syncStatus || "local";
   out.syncError = out.syncError ?? null;
   out.lastSyncAt = out.lastSyncAt ?? null;
@@ -480,6 +482,7 @@ const FIELD_MAP = [
   ["sewerSeptic",        "Sewer Septic",       "text",   ""],
   ["boundaryNotes",      "Boundary Notes",     "text",   ""],
   ["notes",              "Notes",              "text",   ""],
+  ["driveFolderUrl",     "Drive Folder URL",   "text",   ""],
   ["postalAsAbove",      "Postal As Above",    "bool",   false],
   ["overheadPower",      "Overhead Power",     "bool",   false],
   ["trees",              "Trees",              "bool",   false],
@@ -652,6 +655,7 @@ function buildLeadCSV(lead) {
     ["Full Build Quote", lead.fullBuildQuote ? "Yes" : "No"],
     ["Kit Only Quote", lead.kitOnlyQuote ? "Yes" : "No"],
     ["Work Scope", (lead.workScope || []).join("; ")],
+    ["Drive Folder URL", lead.driveFolderUrl || ""],
     [],
     ["Materials"],
     ["Description", "Size", "Qty", "Colorbond / Zinc"],
@@ -722,6 +726,9 @@ function buildLeadSummary(lead) {
     if (m.description || m.qty || m.size || m.material) {
       lines.push(`${dash(m.description)}  |  ${dash(m.size)}  |  Qty: ${dash(m.qty)}  |  ${dash(m.material)}`);
     }
+  }
+  if (lead.driveFolderUrl) {
+    lines.push("", "DOCUMENTS", "-".repeat(40), `Drive folder: ${lead.driveFolderUrl}`);
   }
   return lines.join("\n");
 }
@@ -1963,6 +1970,8 @@ function LeadForm({ initial, onSave, onCancel, onDelete, notify, requestConfirm,
   const [fieldErrors, setFieldErrors] = useState([]);
   const [dirty, setDirty] = useState(false);
   const [draftPrompt, setDraftPrompt] = useState(null);  // {savedAt, draft}
+  const [driveUrlEditing, setDriveUrlEditing] = useState(false);
+  const [driveUrlInput, setDriveUrlInput] = useState("");
 
   /* Update one field. */
   const up = (k, v) => {
@@ -2101,24 +2110,59 @@ function LeadForm({ initial, onSave, onCancel, onDelete, notify, requestConfirm,
     });
   };
 
+  /* Drive Folder URL — manual override for emergencies before v4 Drive integration.
+     Validates the URL is a Google Drive folder before accepting. */
+  const validateDriveUrl = (url) => {
+    const trimmed = (url || "").trim();
+    if (!trimmed) return { ok: true, value: "" };  // allow clearing
+    if (!trimmed.startsWith("https://drive.google.com/")) {
+      return { ok: false, error: "URL must start with https://drive.google.com/" };
+    }
+    if (!trimmed.includes("/folders/")) {
+      return { ok: false, error: "Expected a Drive folder URL (must contain /folders/)" };
+    }
+    return { ok: true, value: trimmed };
+  };
+
+  const handleDriveUrlEdit = () => {
+    setDriveUrlInput(lead.driveFolderUrl || "");
+    setDriveUrlEditing(true);
+  };
+
+  const handleDriveUrlSave = () => {
+    const result = validateDriveUrl(driveUrlInput);
+    if (!result.ok) {
+      notify(result.error, "error");
+      return;
+    }
+    up("driveFolderUrl", result.value);
+    setDriveUrlEditing(false);
+    notify(result.value ? "Drive folder URL saved" : "Drive folder URL cleared", "success");
+  };
+
+  const handleDriveUrlCancel = () => {
+    setDriveUrlEditing(false);
+    setDriveUrlInput("");
+  };
+
   const nameSafe = (lead.clientName || "lead").replace(/[^a-z0-9]+/gi, "-").toLowerCase();
 
   const openJSON = () => setExportView({
     title: "Export JSON",
     content: buildLeadJSON(lead),
-    filename: `shedboss-enquiry-lead-${nameSafe}.json`,
+    filename: `shedboss-lead-enquiry-${nameSafe}.json`,
     mimeType: "application/json",
   });
   const openCSV = () => setExportView({
     title: "Export CSV",
     content: buildLeadCSV(lead),
-    filename: `shedboss-enquiry-lead-${nameSafe}.csv`,
+    filename: `shedboss-lead-enquiry-${nameSafe}.csv`,
     mimeType: "text/csv",
   });
   const openSummary = () => setExportView({
     title: "Printable Summary",
     content: buildLeadSummary(lead),
-    filename: `shedboss-enquiry-lead-${nameSafe}.txt`,
+    filename: `shedboss-lead-enquiry-${nameSafe}.txt`,
     mimeType: "text/plain",
   });
 
@@ -2740,6 +2784,84 @@ function LeadForm({ initial, onSave, onCancel, onDelete, notify, requestConfirm,
           </div>
         </div>
 
+        {/* Drive Folder */}
+        <div className="mt-10">
+          <SectionHeader
+            icon={Folder}
+            title="Drive Folder"
+            subtitle="Bridge to the client's Google Drive folder. Auto-populated by app from v4 onwards."
+          />
+          {driveUrlEditing ? (
+            <div className="space-y-3">
+              <Label>Drive Folder URL</Label>
+              <Input
+                type="url"
+                value={driveUrlInput}
+                onChange={(e) => setDriveUrlInput(e.target.value)}
+                placeholder="https://drive.google.com/drive/folders/..."
+                autoFocus
+              />
+              <div
+                style={{
+                  fontFamily: "'IBM Plex Sans', sans-serif",
+                  fontSize: 12,
+                  color: COLORS.steel,
+                  lineHeight: 1.5,
+                }}
+              >
+                Manual override — paste only a Google Drive <strong>folder</strong> URL. Leave blank to clear.
+              </div>
+              <div className="flex gap-2">
+                <Button variant="primary" onClick={handleDriveUrlSave}>
+                  <Save size={14} /> Save URL
+                </Button>
+                <Button variant="outline" onClick={handleDriveUrlCancel}>Cancel</Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {lead.driveFolderUrl ? (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <a
+                    href={lead.driveFolderUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 13,
+                      color: COLORS.red,
+                      textDecoration: "underline",
+                      wordBreak: "break-all",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    <ExternalLink size={14} />
+                    {lead.driveFolderUrl}
+                  </a>
+                </div>
+              ) : (
+                <div
+                  style={{
+                    fontFamily: "'IBM Plex Sans', sans-serif",
+                    fontSize: 13,
+                    color: COLORS.steel,
+                    fontStyle: "italic",
+                  }}
+                >
+                  Not yet created — will appear when a Drive folder is linked to this lead.
+                </div>
+              )}
+              <div>
+                <Button variant="ghost" onClick={handleDriveUrlEdit}>
+                  <Edit3 size={14} /> {lead.driveFolderUrl ? "Edit manually" : "Enter manually"}
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Bottom save bar */}
         <div className="mt-12 flex justify-end gap-2 flex-wrap">
           <Button variant="outline" onClick={handleCancel}>Cancel</Button>
@@ -3092,7 +3214,7 @@ export default function ShedBossEnquiryLead() {
     setExportAllView({
       title: `Export All Leads (${leads.length})`,
       content: JSON.stringify(leads, null, 2),
-      filename: `shedboss-enquiry-lead-all-${new Date().toISOString().slice(0, 10)}.json`,
+      filename: `shedboss-lead-enquiry-all-${new Date().toISOString().slice(0, 10)}.json`,
       mimeType: "application/json",
     });
   };
