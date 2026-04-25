@@ -1198,6 +1198,78 @@ function ConfirmModal({ title, message, confirmLabel = "Confirm", cancelLabel = 
   );
 }
 
+/* DeleteLeadModal — destructive delete with required reason field.
+   Used only when lead.status === "Lost" (gated upstream). The reason is
+   surfaced in the success toast then dropped — no audit log until v4. */
+function DeleteLeadModal({ leadName, onConfirm, onCancel }) {
+  const [reason, setReason] = useState("");
+  const trimmed = reason.trim();
+  const canConfirm = trimmed.length > 0;
+
+  const labelStyle = {
+    fontFamily: "'Oswald', sans-serif",
+    fontSize: "11px",
+    fontWeight: 600,
+    letterSpacing: "0.12em",
+    textTransform: "uppercase",
+    color: COLORS.charcoal,
+    marginBottom: "4px",
+  };
+  const bodyStyle = {
+    fontFamily: "'IBM Plex Sans', sans-serif",
+    fontSize: "13px",
+    color: COLORS.charcoalLight,
+    lineHeight: 1.5,
+  };
+
+  return (
+    <Modal title="Delete Lead" icon={AlertTriangle} onClose={onCancel} maxWidth="520px">
+      <p style={{ ...bodyStyle, marginBottom: "16px" }}>
+        Permanently delete the lead for <strong style={{ color: COLORS.charcoal }}>{leadName || "this client"}</strong>?
+      </p>
+
+      <div style={{
+        background: COLORS.paper,
+        border: `1px solid ${COLORS.border}`,
+        padding: "12px 14px",
+        marginBottom: "20px",
+      }}>
+        <div style={{ marginBottom: "10px" }}>
+          <div style={labelStyle}>What gets removed</div>
+          <div style={bodyStyle}>The Airtable record (if connected) and the local copy on this device.</div>
+        </div>
+        <div>
+          <div style={labelStyle}>What stays</div>
+          <div style={bodyStyle}>Drive folder and its contents (Drive integration arrives in v4 — no folders exist yet).</div>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: "20px" }}>
+        <Label required>Why is this being deleted?</Label>
+        <Textarea
+          rows={2}
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="e.g. duplicate entry, test data, client withdrew"
+          autoFocus
+        />
+      </div>
+
+      <div className="flex justify-end gap-2 flex-wrap">
+        <Button variant="outline" onClick={onCancel}>Cancel</Button>
+        <Button
+          variant="danger"
+          onClick={() => onConfirm(trimmed)}
+          disabled={!canConfirm}
+          title={canConfirm ? undefined : "Enter a reason to enable delete"}
+        >
+          Delete Permanently
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
 /* =====================================================================
    11. FEATURE MODALS
    ===================================================================== */
@@ -1584,7 +1656,7 @@ function MobileExportMenu({ open, onClose, onJSON, onCSV, onSummary }) {
 }
 
 function Dashboard({
-  leads, onNew, onOpen, onDelete, onExportAll, onImport,
+  leads, onNew, onOpen, onExportAll, onImport,
   notify, requestConfirm, config, syncSummary, onOpenSettings, onSyncAll,
 }) {
   const [search, setSearch] = useState("");
@@ -1613,16 +1685,6 @@ function Dashboard({
     quoted:   leads.filter((l) => l.status === "Quoted").length,
     won:      leads.filter((l) => l.status === "Won").length,
   }), [leads]);
-
-  const confirmDelete = (lead) => {
-    requestConfirm({
-      title: "Delete Lead",
-      message: `Delete the lead for ${lead.clientName || "this client"}? This can't be undone locally.`,
-      confirmLabel: "Delete",
-      destructive: true,
-      onConfirm: () => onDelete(lead.id),
-    });
-  };
 
   return (
     <div style={{ minHeight: "100vh", background: COLORS.paper }}>
@@ -1821,19 +1883,6 @@ function Dashboard({
                       <div className="flex flex-col items-end gap-2" style={{ flexShrink: 0 }}>
                         <StatusBadge status={lead.status} />
                         <SyncBadge status={lead.syncStatus} error={lead.syncError} compact />
-                        <button
-                          onClick={(e) => { e.stopPropagation(); confirmDelete(lead); }}
-                          style={{
-                            padding: "6px",
-                            background: "transparent",
-                            border: `1px solid ${COLORS.border}`,
-                            cursor: "pointer",
-                            color: COLORS.red,
-                          }}
-                          aria-label="Delete lead"
-                        >
-                          <Trash2 size={14} />
-                        </button>
                       </div>
                     </div>
                   </div>
@@ -1845,7 +1894,7 @@ function Dashboard({
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr style={{ background: COLORS.charcoal }}>
-                      {["Client", "Site Address", "Structure", "Quote #", "Date", "Status", ""].map((h) => (
+                      {["Client", "Site Address", "Structure", "Quote #", "Date", "Status"].map((h) => (
                         <th key={h} style={{
                           padding: "14px 16px",
                           textAlign: "left",
@@ -1907,24 +1956,6 @@ function Dashboard({
                             <SyncBadge status={lead.syncStatus} error={lead.syncError} compact />
                           </div>
                         </td>
-                        <td style={{ padding: "14px 16px" }} onClick={(e) => e.stopPropagation()}>
-                          <div className="flex gap-1">
-                            <button
-                              onClick={() => onOpen(lead.id)}
-                              style={{ padding: "6px", background: "transparent", border: `1px solid ${COLORS.border}`, cursor: "pointer", color: COLORS.charcoal }}
-                              aria-label="Edit lead"
-                            >
-                              <Edit3 size={14} />
-                            </button>
-                            <button
-                              onClick={() => confirmDelete(lead)}
-                              style={{ padding: "6px", background: "transparent", border: `1px solid ${COLORS.border}`, cursor: "pointer", color: COLORS.red }}
-                              aria-label="Delete lead"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </div>
-                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1963,7 +1994,7 @@ function Dashboard({
    13. LEAD FORM
    ===================================================================== */
 
-function LeadForm({ initial, onSave, onCancel, onDelete, notify, requestConfirm, saving }) {
+function LeadForm({ initial, onSave, onCancel, onDelete, notify, requestConfirm, requestDeleteConfirm, saving }) {
   const [lead, setLead] = useState(initial);
   const [exportView, setExportView] = useState(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -2100,13 +2131,15 @@ function LeadForm({ initial, onSave, onCancel, onDelete, notify, requestConfirm,
     });
   };
 
+  const canDelete = lead.status === "Lost";
+
   const handleDeleteClick = () => {
-    requestConfirm({
-      title: "Delete Lead",
-      message: "Delete this lead permanently? This can't be undone locally.",
-      confirmLabel: "Delete",
-      destructive: true,
-      onConfirm: onDelete,
+    // Belt-and-braces: button is also disabled when !canDelete, but guard
+    // here too in case a future code path bypasses the disabled state.
+    if (!canDelete) return;
+    requestDeleteConfirm({
+      leadName: lead.clientName,
+      onConfirm: (reason) => onDelete(reason),
     });
   };
 
@@ -2229,7 +2262,13 @@ function LeadForm({ initial, onSave, onCancel, onDelete, notify, requestConfirm,
               <Printer size={14} /> Summary
             </Button>
             {onDelete && (
-              <Button variant="danger" style={{ padding: "8px 12px" }} onClick={handleDeleteClick}>
+              <Button
+                variant="danger"
+                style={{ padding: "8px 12px" }}
+                onClick={handleDeleteClick}
+                disabled={!canDelete}
+                title={canDelete ? undefined : "Delete is only available when status is Lost. Archive the lead by setting status to Lost first."}
+              >
                 <Trash2 size={14} />
               </Button>
             )}
@@ -2249,7 +2288,13 @@ function LeadForm({ initial, onSave, onCancel, onDelete, notify, requestConfirm,
               <MoreVertical size={16} />
             </button>
             {onDelete && (
-              <Button variant="danger" style={{ padding: "8px 10px" }} onClick={handleDeleteClick}>
+              <Button
+                variant="danger"
+                style={{ padding: "8px 10px" }}
+                onClick={handleDeleteClick}
+                disabled={!canDelete}
+                title={canDelete ? undefined : "Delete is only available when status is Lost. Archive the lead by setting status to Lost first."}
+              >
                 <Trash2 size={14} />
               </Button>
             )}
@@ -2899,6 +2944,7 @@ export default function ShedBossEnquiryLead() {
   const [exportAllView, setExportAllView] = useState(null);
   const [storageAvailable, setStorageAvailable] = useState(true);
   const [confirmState, setConfirmState] = useState(null);
+  const [deleteConfirmState, setDeleteConfirmState] = useState(null);
   const [saving, setSaving] = useState(false);
   const [config, setConfig] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -2928,6 +2974,16 @@ export default function ShedBossEnquiryLead() {
   const handleCancelConfirm = () => {
     confirmState?.onCancel?.();
     setConfirmState(null);
+  };
+
+  const requestDeleteConfirm = (cfg) => setDeleteConfirmState(cfg);
+  const handleDeleteConfirm = (reason) => {
+    deleteConfirmState?.onConfirm?.(reason);
+    setDeleteConfirmState(null);
+  };
+  const handleCancelDeleteConfirm = () => {
+    deleteConfirmState?.onCancel?.();
+    setDeleteConfirmState(null);
   };
 
   /* Sync summary derived from leads. */
@@ -3113,7 +3169,7 @@ export default function ShedBossEnquiryLead() {
     else if (finalLead.syncStatus === "local") notify(existing ? "Saved locally" : "Created locally", "success");
   };
 
-  const handleDeleteLead = async (id) => {
+  const handleDeleteLead = async (id, reason) => {
     const lead = leadsRef.current.find((l) => l.id === id);
     const cfg = configRef.current;
 
@@ -3143,7 +3199,7 @@ export default function ShedBossEnquiryLead() {
     await safeDelete(LEAD_KEY + id);
     await safeDelete(DRAFT_KEY + id);   // clean up any orphan draft
     await persistIndex(newLeads);
-    notify("Lead deleted", "info");
+    notify(reason ? `Deleted: ${reason}` : "Lead deleted", "info");
   };
 
   const handleSyncAll = async () => {
@@ -3271,7 +3327,6 @@ export default function ShedBossEnquiryLead() {
             leads={leads}
             onNew={handleNew}
             onOpen={handleOpen}
-            onDelete={handleDeleteLead}
             onExportAll={handleExportAll}
             onImport={handleImport}
             notify={notify}
@@ -3289,11 +3344,12 @@ export default function ShedBossEnquiryLead() {
             onCancel={() => setView("dashboard")}
             onDelete={
               leads.some((l) => l.id === activeLead.id)
-                ? () => handleDeleteLead(activeLead.id)
+                ? (reason) => handleDeleteLead(activeLead.id, reason)
                 : null
             }
             notify={notify}
             requestConfirm={requestConfirm}
+            requestDeleteConfirm={requestDeleteConfirm}
             saving={saving || syncingAll}
           />
         )}
@@ -3328,6 +3384,14 @@ export default function ShedBossEnquiryLead() {
             destructive={confirmState.destructive}
             onConfirm={handleConfirm}
             onCancel={handleCancelConfirm}
+          />
+        )}
+
+        {deleteConfirmState && (
+          <DeleteLeadModal
+            leadName={deleteConfirmState.leadName}
+            onConfirm={handleDeleteConfirm}
+            onCancel={handleCancelDeleteConfirm}
           />
         )}
 
