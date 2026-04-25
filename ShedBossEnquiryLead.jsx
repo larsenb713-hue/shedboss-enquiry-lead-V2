@@ -13,7 +13,7 @@
 
    ARCHITECTURE (top to bottom):
      1. Constants & domain model      — keys, colours, default lead
-     2. Storage helpers               — wraps window.storage
+     2. Storage helpers               — wraps browser localStorage
      3. Utilities                     — clipboard, share, download, dates
      4. Airtable client               — rate-limited fetch wrapper
      5. Field mapper                  — lead <-> Airtable record
@@ -187,14 +187,16 @@ function validateLead(lead) {
 }
 
 /* =====================================================================
-   2. STORAGE HELPERS — wrap window.storage with try/catch
+   2. STORAGE HELPERS — wrap browser localStorage with try/catch
    ===================================================================== */
 
 async function safeGet(key) {
   try {
-    if (!window.storage) return { ok: false, error: "storage unavailable" };
-    const res = await window.storage.get(key);
-    return { ok: true, value: res ? res.value : null };
+    if (typeof localStorage === "undefined") {
+      return { ok: false, error: "storage unavailable" };
+    }
+    const value = localStorage.getItem(key);
+    return { ok: true, value };
   } catch (e) {
     return { ok: false, error: e?.message || "get failed" };
   }
@@ -202,8 +204,10 @@ async function safeGet(key) {
 
 async function safeSet(key, value) {
   try {
-    if (!window.storage) return { ok: false, error: "storage unavailable" };
-    await window.storage.set(key, value);
+    if (typeof localStorage === "undefined") {
+      return { ok: false, error: "storage unavailable" };
+    }
+    localStorage.setItem(key, value);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e?.message || "set failed" };
@@ -212,8 +216,10 @@ async function safeSet(key, value) {
 
 async function safeDelete(key) {
   try {
-    if (!window.storage) return { ok: false, error: "storage unavailable" };
-    await window.storage.delete(key);
+    if (typeof localStorage === "undefined") {
+      return { ok: false, error: "storage unavailable" };
+    }
+    localStorage.removeItem(key);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e?.message || "delete failed" };
