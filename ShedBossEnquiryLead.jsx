@@ -2957,9 +2957,6 @@ export default function ShedBossEnquiryLead() {
   useEffect(() => { leadsRef.current = leads; }, [leads]);
   useEffect(() => { configRef.current = config; }, [config]);
 
-  // TF-006 build active — REMOVE BEFORE MERGE TO MAIN
-  useEffect(() => { console.warn("TF-006 build active"); }, []);
-
   const notify = useCallback((msg, type = "info") => {
     const id = Date.now() + Math.random();
     setToast({ msg, type, id });
