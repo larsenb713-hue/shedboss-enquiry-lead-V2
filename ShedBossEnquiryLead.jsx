@@ -3132,9 +3132,21 @@ export default function ShedBossEnquiryLead() {
     const cfg = configRef.current;
     const willSync = isConfigured(cfg);
 
+    // TF-007: carry forward the canonical airtableRecordId from the dashboard's
+    // record. LeadForm's `useState(initial)` only reads `initial` on mount, so
+    // after the first successful Airtable create the form's local `lead` state
+    // can have a stale null airtableRecordId. Without this guard, the second
+    // save takes the createRecord branch and produces a duplicate Airtable
+    // record with the same ShedBoss ID. The dashboard's stored record wins;
+    // we only fall back to whatever the form sent if the dashboard's value
+    // is also empty.
+    const merged = existing
+      ? { ...updated, airtableRecordId: existing.airtableRecordId ?? updated.airtableRecordId }
+      : updated;
+
     // Optimistic local write first.
     const optimistic = {
-      ...updated,
+      ...merged,
       syncStatus: willSync ? "syncing" : "local",
       syncError: null,
     };
