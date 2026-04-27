@@ -2957,6 +2957,9 @@ export default function ShedBossEnquiryLead() {
   useEffect(() => { leadsRef.current = leads; }, [leads]);
   useEffect(() => { configRef.current = config; }, [config]);
 
+  // TF-006 build active — REMOVE BEFORE MERGE TO MAIN
+  useEffect(() => { console.warn("TF-006 build active"); }, []);
+
   const notify = useCallback((msg, type = "info") => {
     const id = Date.now() + Math.random();
     setToast({ msg, type, id });
@@ -3185,33 +3188,54 @@ export default function ShedBossEnquiryLead() {
     const lead = leadsRef.current.find((l) => l.id === id);
     const cfg = configRef.current;
 
-    // Try Airtable first; if that fails, keep locally so user can retry.
+    // TF-006: Local-only delete logic, used by both the happy path and the
+    // Airtable-failure fallback. Extracted to keep the two flows in lockstep.
+    const doLocalDelete = async (toastMessage) => {
+      const newLeads = leadsRef.current.filter((l) => l.id !== id);
+      setLeads(newLeads);
+      if (activeLead?.id === id) {
+        setActiveLead(null);
+        setView("dashboard");
+      }
+      await safeDelete(LEAD_KEY + id);
+      await safeDelete(DRAFT_KEY + id);   // clean up any orphan draft
+      await persistIndex(newLeads);
+      notify(toastMessage, "info");
+    };
+
+    // Try Airtable first; if that fails, offer a local-only fallback.
     if (lead?.airtableRecordId && isConfigured(cfg)) {
       try {
         await airtable.deleteRecord(cfg, lead.airtableRecordId);
       } catch (e) {
         const msg = friendlyAirtableError(e);
+        // Mark error state and persist BEFORE prompting, so if the user cancels
+        // the fallback, the lead is visibly in error rather than silently stuck.
         const newLeads = leadsRef.current.map((l) =>
           l.id === id ? { ...l, syncStatus: "error", syncError: `Delete failed: ${msg}` } : l
         );
         setLeads(newLeads);
         const updatedLead = newLeads.find((l) => l.id === id);
         if (updatedLead) await persistLead(updatedLead);
-        notify(`Airtable delete failed: ${msg}. Lead kept locally — retry later.`, "error");
+        // TF-006: rather than leaving the lead permanently undeletable through
+        // the UI (the failure mode demonstrated 2026-04-26), offer a local-only
+        // fallback. Reason: remote record may already be missing or unreachable.
+        requestConfirm({
+          title: "Airtable Delete Failed",
+          message: `Airtable couldn't delete this lead: ${msg}\n\nThe remote record may already be missing or unreachable. Remove the local copy anyway? The Airtable record (if it still exists) will not be touched.`,
+          confirmLabel: "Remove Locally",
+          cancelLabel: "Keep & Retry Later",
+          destructive: true,
+          onConfirm: () => {
+            doLocalDelete(reason ? `Removed locally: ${reason}` : "Removed locally");
+          },
+        });
         return;
       }
     }
 
-    const newLeads = leadsRef.current.filter((l) => l.id !== id);
-    setLeads(newLeads);
-    if (activeLead?.id === id) {
-      setActiveLead(null);
-      setView("dashboard");
-    }
-    await safeDelete(LEAD_KEY + id);
-    await safeDelete(DRAFT_KEY + id);   // clean up any orphan draft
-    await persistIndex(newLeads);
-    notify(reason ? `Deleted: ${reason}` : "Lead deleted", "info");
+    // Happy path: Airtable succeeded, or the lead never had a remote record.
+    await doLocalDelete(reason ? `Deleted: ${reason}` : "Lead deleted");
   };
 
   const handleSyncAll = async () => {
