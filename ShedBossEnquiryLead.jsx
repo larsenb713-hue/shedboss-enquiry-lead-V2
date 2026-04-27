@@ -321,6 +321,38 @@ function formatRelativeDate(iso) {
   return iso.length > 10 ? iso.slice(0, 10) : iso;
 }
 
+// TF-003: Lenient duplicate matcher used by the search-before-create screen
+// AND by the save-time duplicate guard. Coding Standards §4 Rule 5 requires
+// "partial name matches, mobile numbers ignoring spacing, email domain matches".
+// A single query string is matched against name, mobile (digits-only), and
+// email (substring + domain). Returns leads sorted with strongest matches
+// (mobile digits-only equality) first.
+function findMatches(query, leads) {
+  const q = (query || "").trim().toLowerCase();
+  if (!q) return [];
+  const qDigits = q.replace(/\D/g, "");
+  const qDomain = q.includes("@") ? q.split("@")[1] : null;
+
+  const scored = [];
+  for (const l of leads || []) {
+    const name = (l.clientName || "").toLowerCase();
+    const email = (l.email || "").toLowerCase();
+    const mDigits = (l.mobile || "").replace(/\D/g, "");
+
+    let score = 0;
+    // Strongest signal: mobile digits-only exact match.
+    if (qDigits.length >= 6 && mDigits && mDigits === qDigits) score = 100;
+    else if (qDigits.length >= 4 && mDigits && mDigits.includes(qDigits)) score = 60;
+    else if (name && name.includes(q)) score = 40;
+    else if (email && email.includes(q)) score = 30;
+    else if (qDomain && email && email.includes(qDomain)) score = 20;
+
+    if (score > 0) scored.push({ lead: l, score });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored.map((s) => s.lead);
+}
+
 /* =====================================================================
    4. AIRTABLE CLIENT — rate-limited, error-friendly
    ===================================================================== */
@@ -1991,6 +2023,299 @@ function Dashboard({
 }
 
 /* =====================================================================
+   12b. LEAD SEARCH (search-before-create)  [TF-003]
+   ===================================================================== */
+
+// TF-003: Mounted between the dashboard and the form. Tapping "New Lead"
+// routes here first; the user can only proceed to a blank form by explicitly
+// clicking "None of these — create new". Closes Coding Standards §4 Rule 5
+// (search before create). Save-time guard in handleSaveLead is the second
+// half of Rule 5 compliance — this screen alone is bypassable by users who
+// type straight into the form.
+function LeadSearch({ leads, onOpen, onCreateNew, onCancel }) {
+  const [query, setQuery] = useState("");
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    // Autofocus the search box on mount.
+    inputRef.current?.focus();
+  }, []);
+
+  const matches = useMemo(() => findMatches(query, leads), [query, leads]);
+  const trimmed = query.trim();
+  const hasQuery = trimmed.length > 0;
+
+  return (
+    <div style={{ minHeight: "100vh", background: COLORS.paper }}>
+      {/* Sticky toolbar */}
+      <div style={{
+        background: "#fff",
+        borderBottom: `1px solid ${COLORS.border}`,
+        padding: "12px 16px",
+        position: "sticky",
+        top: 0,
+        zIndex: 50,
+      }}>
+        <div className="max-w-4xl mx-auto flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onCancel}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                padding: "8px 12px",
+                background: "transparent",
+                border: `1px solid ${COLORS.border}`,
+                cursor: "pointer",
+                fontFamily: "'IBM Plex Sans', sans-serif",
+                fontSize: "13px",
+                color: COLORS.charcoal,
+              }}
+            >
+              <ArrowLeft size={14} /> Back
+            </button>
+            <div className="hidden sm:block">
+              <ShedBossLogo size={30} />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-4xl mx-auto px-4 sm:px-8 py-6 sm:py-8">
+        {/* Banner */}
+        <div style={{ background: COLORS.charcoal, padding: "20px 24px", marginBottom: "24px", position: "relative", overflow: "hidden" }}>
+          <div style={{
+            position: "absolute",
+            right: "-40px",
+            top: "-40px",
+            width: "160px",
+            height: "160px",
+            background: COLORS.red,
+            transform: "rotate(45deg)",
+            opacity: 0.15,
+          }} />
+          <div style={{ position: "relative", zIndex: 1 }}>
+            <div style={{
+              fontFamily: "'IBM Plex Sans', sans-serif",
+              fontSize: "11px",
+              letterSpacing: "0.25em",
+              color: COLORS.red,
+              textTransform: "uppercase",
+              marginBottom: "6px",
+            }}>
+              {APP_NAME}
+            </div>
+            <h1 style={{
+              fontFamily: "'Oswald', sans-serif",
+              fontSize: "clamp(22px, 5vw, 32px)",
+              fontWeight: 600,
+              color: "#fff",
+              letterSpacing: "0.04em",
+              textTransform: "uppercase",
+              lineHeight: 1.1,
+            }}>
+              Search Before You Create
+            </h1>
+            <p style={{
+              fontFamily: "'IBM Plex Sans', sans-serif",
+              fontSize: "13px",
+              color: COLORS.steelLight,
+              marginTop: "8px",
+              fontStyle: "italic",
+              lineHeight: 1.4,
+            }}>
+              Has this client called before? Search by name, mobile, or email — picking up the existing lead beats creating a duplicate.
+            </p>
+          </div>
+        </div>
+
+        {/* Search input */}
+        <div style={{ marginBottom: "20px" }}>
+          <Label htmlFor="lead-search-input">Find existing lead</Label>
+          <div style={{ position: "relative" }}>
+            <Search
+              size={16}
+              style={{
+                position: "absolute",
+                left: "12px",
+                top: "50%",
+                transform: "translateY(-50%)",
+                color: COLORS.steel,
+                pointerEvents: "none",
+              }}
+            />
+            <input
+              ref={inputRef}
+              id="lead-search-input"
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Name, mobile number, or email..."
+              autoComplete="off"
+              style={{
+                width: "100%",
+                padding: "12px 12px 12px 36px",
+                fontFamily: "'IBM Plex Sans', sans-serif",
+                fontSize: "14px",
+                background: "#fff",
+                border: `1px solid ${COLORS.border}`,
+                color: COLORS.charcoal,
+                outline: "none",
+                borderRadius: "2px",
+              }}
+              onFocus={(e) => { e.target.style.borderColor = COLORS.charcoal; }}
+              onBlur={(e) => { e.target.style.borderColor = COLORS.border; }}
+            />
+          </div>
+        </div>
+
+        {/* Results region */}
+        <div style={{ marginBottom: "24px" }}>
+          {!hasQuery && (
+            <div style={{
+              padding: "24px",
+              background: "#fff",
+              border: `1px dashed ${COLORS.border}`,
+              fontFamily: "'IBM Plex Sans', sans-serif",
+              fontSize: "13px",
+              color: COLORS.steel,
+              textAlign: "center",
+            }}>
+              Start typing to find existing leads. Or click <strong style={{ color: COLORS.charcoal }}>None of these — create new</strong> below if you've checked already.
+            </div>
+          )}
+
+          {hasQuery && matches.length === 0 && (
+            <div style={{
+              padding: "20px 24px",
+              background: `${COLORS.green}10`,
+              border: `1px solid ${COLORS.green}40`,
+              borderLeft: `4px solid ${COLORS.green}`,
+              fontFamily: "'IBM Plex Sans', sans-serif",
+              fontSize: "13px",
+              color: COLORS.charcoal,
+            }}>
+              No existing leads match "<strong>{trimmed}</strong>". Looks like a new client — proceed below.
+            </div>
+          )}
+
+          {hasQuery && matches.length > 0 && (
+            <>
+              <div style={{
+                fontFamily: "'Oswald', sans-serif",
+                fontSize: "12px",
+                fontWeight: 600,
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                color: COLORS.charcoal,
+                marginBottom: "8px",
+              }}>
+                {matches.length} possible match{matches.length === 1 ? "" : "es"} — open one if it's the same client
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                {matches.map((lead) => (
+                  <button
+                    key={lead.id}
+                    onClick={() => onOpen(lead.id)}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      padding: "14px 16px",
+                      background: "#fff",
+                      border: `1px solid ${COLORS.border}`,
+                      borderLeft: `4px solid ${COLORS.red}`,
+                      cursor: "pointer",
+                      textAlign: "left",
+                      borderRadius: "2px",
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = COLORS.paper; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = "#fff"; }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                        <span style={{
+                          fontFamily: "'Oswald', sans-serif",
+                          fontSize: "16px",
+                          fontWeight: 600,
+                          color: COLORS.charcoal,
+                          letterSpacing: "0.02em",
+                        }}>
+                          {lead.clientName || "(no name)"}
+                        </span>
+                        <StatusBadge status={lead.status} />
+                      </div>
+                      <span style={{
+                        fontFamily: "'IBM Plex Sans', sans-serif",
+                        fontSize: "11px",
+                        color: COLORS.steel,
+                        letterSpacing: "0.05em",
+                        textTransform: "uppercase",
+                      }}>
+                        Open →
+                      </span>
+                    </div>
+                    <div style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: "12px",
+                      color: COLORS.steel,
+                      marginTop: "6px",
+                      display: "flex",
+                      gap: "16px",
+                      flexWrap: "wrap",
+                    }}>
+                      {lead.mobile && <span>📞 {lead.mobile}</span>}
+                      {lead.email && <span>✉ {lead.email}</span>}
+                      {!lead.mobile && !lead.email && <span style={{ fontStyle: "italic" }}>No contact details</span>}
+                    </div>
+                    {lead.siteAddress && (
+                      <div style={{
+                        fontFamily: "'IBM Plex Sans', sans-serif",
+                        fontSize: "12px",
+                        color: COLORS.steel,
+                        marginTop: "4px",
+                      }}>
+                        {lead.siteAddress}
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Create-new action */}
+        <div style={{
+          padding: "16px",
+          background: "#fff",
+          border: `1px solid ${COLORS.border}`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "12px",
+          flexWrap: "wrap",
+        }}>
+          <div style={{
+            fontFamily: "'IBM Plex Sans', sans-serif",
+            fontSize: "13px",
+            color: COLORS.charcoal,
+            flex: "1 1 240px",
+          }}>
+            {matches.length > 0
+              ? "None of the matches above is the same client?"
+              : "Confirmed it's a new client?"}
+          </div>
+          <Button variant="primary" onClick={onCreateNew}>
+            <Plus size={14} /> None of these — create new
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =====================================================================
    13. LEAD FORM
    ===================================================================== */
 
@@ -2092,7 +2417,7 @@ function LeadForm({ initial, onSave, onCancel, onDelete, notify, requestConfirm,
     notify("Draft discarded", "info");
   };
 
-  const handleSave = useCallback(() => {
+  const handleSave = useCallback(async () => {
     const errors = validateLead(lead);
     if (errors.length) {
       setFieldErrors(errors);
@@ -2102,10 +2427,14 @@ function LeadForm({ initial, onSave, onCancel, onDelete, notify, requestConfirm,
     }
     const updated = { ...lead, updatedAt: new Date().toISOString() };
     setLead(updated);
-    setDirty(false);
-    // Clear draft on successful save.
-    safeDelete(DRAFT_KEY + updated.id);
-    onSave(updated);
+    // TF-003: Don't eagerly clear dirty/draft — the parent's save can be
+    // cancelled by the duplicate-mobile guard. If onSave returns falsy, the
+    // user's input must remain in the form (still dirty, draft preserved).
+    const saved = await onSave(updated);
+    if (saved !== false) {
+      setDirty(false);
+      safeDelete(DRAFT_KEY + updated.id);
+    }
   }, [lead, notify, onSave]);
 
   /* --- Cmd/Ctrl+S to save --- */
@@ -3114,6 +3443,15 @@ export default function ShedBossEnquiryLead() {
 
   /* --- Handlers --- */
   const handleNew = () => {
+    // TF-003: Route through search-first screen instead of opening blank form.
+    // Closes Coding Standards §4 Rule 5 (search before create).
+    setView("search");
+  };
+
+  // TF-003: Called from LeadSearch when the user explicitly chooses
+  // "None of these — create new". This is the only path that opens a
+  // blank form from a New-Lead intent.
+  const handleProceedToCreate = () => {
     setActiveLead(emptyLead());
     setView("form");
   };
@@ -3127,6 +3465,37 @@ export default function ShedBossEnquiryLead() {
   };
 
   const handleSaveLead = async (updated) => {
+    // TF-003: Save-time duplicate guard (Coding Standards §4 Rule 5 part 2).
+    // The search-first screen catches duplicates created via "New Lead", but a
+    // PM editing an existing lead — or one who just typed a wrong number — can
+    // still produce a clash. Block saves where another lead has the same mobile
+    // (digits-only) and require explicit override. Returns false on cancel so
+    // LeadForm can keep its dirty state and not silently lose the user's input.
+    const updatedDigits = (updated.mobile || "").replace(/\D/g, "");
+    if (updatedDigits.length >= 6) {
+      const dup = leadsRef.current.find(
+        (l) => l.id !== updated.id &&
+          (l.mobile || "").replace(/\D/g, "") === updatedDigits
+      );
+      if (dup) {
+        const proceed = await new Promise((resolve) => {
+          requestConfirm({
+            title: "Possible Duplicate",
+            message: `Mobile ${updated.mobile} is already on lead "${dup.clientName || "(no name)"}" (status: ${dup.status}). Save anyway? Two leads sharing a mobile makes Rule 2 (one client = one folder) impossible to enforce later.`,
+            confirmLabel: "Save Anyway",
+            cancelLabel: "Cancel",
+            destructive: false,
+            onConfirm: () => resolve(true),
+            onCancel: () => resolve(false),
+          });
+        });
+        if (!proceed) {
+          notify("Save cancelled — duplicate mobile", "warn");
+          return false;
+        }
+      }
+    }
+
     setSaving(true);
     const existing = leadsRef.current.find((l) => l.id === updated.id);
     const cfg = configRef.current;
@@ -3179,6 +3548,7 @@ export default function ShedBossEnquiryLead() {
 
     if (finalLead.syncStatus === "synced") notify(existing ? "Saved & synced" : "Created & synced", "success");
     else if (finalLead.syncStatus === "local") notify(existing ? "Saved locally" : "Created locally", "success");
+    return true;
   };
 
   const handleDeleteLead = async (id, reason) => {
@@ -3368,6 +3738,14 @@ export default function ShedBossEnquiryLead() {
             syncSummary={syncSummary}
             onOpenSettings={() => setShowSettings(true)}
             onSyncAll={handleSyncAll}
+          />
+        )}
+        {view === "search" && (
+          <LeadSearch
+            leads={leads}
+            onOpen={handleOpen}
+            onCreateNew={handleProceedToCreate}
+            onCancel={() => setView("dashboard")}
           />
         )}
         {view === "form" && activeLead && (
